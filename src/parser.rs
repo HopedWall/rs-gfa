@@ -7,29 +7,22 @@ use nom::sequence::terminated;
 use nom::IResult;
 use std::fs::File;
 use std::io::prelude::*;
-use std::io::{BufReader, Lines};
+use std::io::BufReader;
 use std::path::PathBuf;
 
 use crate::gfa::*;
 
 fn parse_name(input: &str) -> IResult<&str, String> {
-    // let (i, name) = re_find!(input, r"^[!-)+-<>-~][!-~]*")?;
-    let (i, name) = is_not("\t")(input)?;
+    let (i, name) = re_find!(input, r"^[!-)+-<>-~][!-~]*")?;
     Ok((i, name.to_string()))
-}
-
-fn parse_header_(input: &[&str]) -> Option<Header> {
-    let opt: Vec<_> = input[1].split_terminator(":").collect();
-    Some(Header {
-        version: opt[2].to_string(),
-    })
 }
 
 fn parse_header(input: &str) -> IResult<&str, Header> {
     let col = tag(":");
+    // let (i, _line_type) = terminated(tag("H"), tag("\t"))(input)?;
     let (i, _opt_tag) = terminated(tag("VN"), &col)(input)?;
     let (i, _opt_type) = terminated(tag("Z"), &col)(i)?;
-    let (i, version) = is_not("\n")(i)?;
+    let (i, version) = re_find!(i, r"[ !-~]+")?;
 
     Ok((
         i,
@@ -39,6 +32,11 @@ fn parse_header(input: &str) -> IResult<&str, Header> {
     ))
 }
 
+fn parse_sequence(input: &str) -> IResult<&str, String> {
+    let (i, seq) = re_find!(input, r"\*|[A-Za-z=.]+")?;
+    Ok((i, seq.to_string()))
+}
+
 fn parse_orient(input: &str) -> IResult<&str, Orientation> {
     let fwd = map(tag("+"), |_| Orientation::Forward);
     let bkw = map(tag("-"), |_| Orientation::Backward);
@@ -46,42 +44,66 @@ fn parse_orient(input: &str) -> IResult<&str, Orientation> {
 }
 
 fn parse_overlap(input: &str) -> IResult<&str, String> {
-    // let (i, overlap) = re_find!(input, r"\*|([0-9]+[MIDNSHPX=])+")?;
-    let (i, overlap) = is_not(",")(input)?;
-    let string = overlap.to_string();
-    Ok((i, string))
+    let (i, overlap) = re_find!(input, r"\*|([0-9]+[MIDNSHPX=])+")?;
+    Ok((i, overlap.to_string()))
 }
 
-fn parse_segment(input: &str) -> IResult<&str, Segment> {
-    let fields: Vec<_> = input.split_terminator("\t").collect();
+/*
+fn parse_optional(input: &str) -> IResult<&str, OptionalField> {
+    let col = tag(":");
+    let (i, opt_tag) = re_find!(input, r"^[A-Za-Z][A-Za-z0-9]")?;
+    let (i, opt_type) = preceded(col, one_of("AifZJHB"))(i)?;
 
-    let name = fields[0].to_string();
-    let sequence = fields[1].to_string();
+    let (i, opt_val) = match opt_type {
+        'A' => ,
+        'i' => true,
+        'f' => true,
+        'Z' => true,
+        'J' => true,
+        'H' => true,
+        'B' => true,
+    }
+
+    // let (i, opt_typ) = terminated(one_of("AifZJHB"), col);
+    // let (i, opt_tag) = re_find!(input, r"[A-Za-Z][A-Za-z0-9]")?;
+    // let (
+}
+*/
+
+fn parse_segment(input: &str) -> IResult<&str, Segment> {
+    let tab = tag("\t");
+    // let (input, _line_type) = terminated(tag("S"), &tab)(input)?;
+
+    let (i, name) = terminated(parse_name, &tab)(input)?;
+
+    let (i, seq) = parse_sequence(i)?;
+
+    // TODO branch on the length of the remaining input to read the rest
 
     let result = Segment {
-        name,
-        sequence,
+        name: name,
+        sequence: seq,
         read_count: None,
         fragment_count: None,
         kmer_count: None,
         uri: None,
     };
 
-    Ok((input, result))
+    Ok((i, result))
 }
 
 fn parse_link(input: &str) -> IResult<&str, Link> {
-    let fields: Vec<_> = input.split_terminator("\t").collect();
     let tab = tag("\t");
+    // let (i, _line_type) = terminated(tag("L"), &tab)(input)?;
 
     let seg = terminated(parse_name, &tab);
     let orient = terminated(parse_orient, &tab);
 
-    let (_, from_segment) = parse_name(fields[0])?;
-    let (_, from_orient) = parse_orient(fields[1])?;
-    let (_, to_segment) = parse_name(fields[2])?;
-    let (_, to_orient) = parse_orient(fields[3])?;
-    let (_, overlap) = parse_overlap(fields[4])?;
+    let (i, from_segment) = seg(input)?;
+    let (i, from_orient) = orient(i)?;
+    let (i, to_segment) = seg(i)?;
+    let (i, to_orient) = orient(i)?;
+    let (i, overlap) = parse_overlap(i)?;
 
     let result = Link {
         from_segment,
@@ -97,19 +119,23 @@ fn parse_link(input: &str) -> IResult<&str, Link> {
         edge_id: None,
     };
 
-    Ok((input, result))
+    Ok((i, result))
 }
 
 fn parse_containment(input: &str) -> IResult<&str, Containment> {
-    let fields: Vec<_> = input.split_terminator("\t").collect();
+    let tab = tag("\t");
+    // let (i, _line_type) = terminated(tag("C"), &tab)(input)?;
 
-    let (_, container_name) = parse_name(fields[0])?;
-    let (_, container_orient) = parse_orient(fields[1])?;
-    let (_, contained_name) = parse_name(fields[2])?;
-    let (_, contained_orient) = parse_orient(fields[3])?;
-    let pos = fields[4];
+    let seg = terminated(parse_name, &tab);
+    let orient = terminated(parse_orient, &tab);
 
-    let (_, overlap) = parse_overlap(fields[5])?;
+    let (i, container_name) = seg(input)?;
+    let (i, container_orient) = orient(i)?;
+    let (i, contained_name) = seg(i)?;
+    let (i, contained_orient) = orient(i)?;
+    let (i, pos) = terminated(digit0, &tab)(i)?;
+
+    let (i, overlap) = terminated(parse_overlap, &tab)(i)?;
 
     let result = Containment {
         container_name,
@@ -123,24 +149,20 @@ fn parse_containment(input: &str) -> IResult<&str, Containment> {
         edge_id: None,
     };
 
-    Ok((input, result))
+    Ok((i, result))
 }
 
 fn parse_path(input: &str) -> IResult<&str, Path> {
-    let fields: Vec<_> = input.split_terminator("\t").collect();
-
-    // let (_, path_name) = parse_name(fields[0])?;
-
     let (i, path_name) = terminated(parse_name, &tab)(input)?;
-
     let (i, segs) = terminated(parse_name, &tab)(i)?;
+    let segment_names = segs.split_terminator(",").map(String::from).collect();
+    let (i, overlaps) = separated_list(tag(","), parse_overlap)(i)?;
 
-    let segment_names = segs.split_terminator(",").collect();
-
-    let (i, overlaps) = is_not("\t\n")(i)?;
-    let overlaps = overlaps.split_terminator(",").map(String::from).collect();
-
-    let result = Path::new(&path_name, segment_names, overlaps);
+    let result = Path {
+        path_name,
+        segment_names,
+        overlaps,
+    };
 
     Ok((i, result))
 }
@@ -172,20 +194,6 @@ pub fn parse_line(line: &str) -> IResult<&str, Line> {
         }
         _ => Ok((i, Line::Comment)), // ignore unrecognized headers for now
     }
-}
-
-pub fn parse_gfa_stream<'a, B: BufRead>(
-    input: &'a mut Lines<B>,
-) -> impl Iterator<Item = Line> + 'a {
-    input.map(|l| {
-        let l = l.expect("Error parsing file");
-        let r = parse_line(&l);
-        if let Ok((_, parsed)) = r {
-            parsed
-        } else {
-            panic!("Error parsing GFA lines")
-        }
-    })
 }
 
 pub fn parse_gfa(path: &PathBuf) -> Option<GFA> {
@@ -227,9 +235,9 @@ mod tests {
 
         match parse_header(hdr) {
             Err(err) => {
-                panic!(format!("{:?}", err));
+                panic!(&format!("{:?}", err));
             }
-            Ok((_res, h)) => assert_eq!(h, hdr_),
+            Ok((res, h)) => assert_eq!(h, hdr_),
         }
     }
 
@@ -246,15 +254,15 @@ mod tests {
         };
         match parse_segment(seg) {
             Err(err) => {
-                panic!(format!("{:?}", err));
+                panic!(&format!("{:?}", err));
             }
-            Ok((_res, s)) => assert_eq!(s, seg_),
+            Ok((res, s)) => assert_eq!(s, seg_),
         }
     }
 
     #[test]
     fn can_parse_link() {
-        let link = "11	+	12	-	4M";
+        let link = "11	+	12	-	4M	";
         let link_ = Link {
             from_segment: "11".to_string(),
             from_orient: Orientation::Forward,
@@ -270,15 +278,15 @@ mod tests {
         };
         match parse_link(link) {
             Err(err) => {
-                panic!(format!("{:?}", err));
+                panic!(&format!("{:?}", err));
             }
-            Ok((_res, l)) => assert_eq!(l, link_),
+            Ok((res, l)) => assert_eq!(l, link_),
         }
     }
 
     #[test]
     fn can_parse_containment() {
-        let cont = "1\t-\t2\t+\t110\t100M";
+        let cont = "1\t-\t2\t+\t110\t100M	";
 
         let cont_ = Containment {
             container_name: "1".to_string(),
@@ -294,9 +302,9 @@ mod tests {
 
         match parse_containment(cont) {
             Err(err) => {
-                panic!(format!("{:?}", err));
+                panic!(&format!("{:?}", err));
             }
-            Ok((_res, c)) => assert_eq!(c, cont_),
+            Ok((res, c)) => assert_eq!(c, cont_),
         }
     }
 
@@ -306,19 +314,15 @@ mod tests {
 
         let path_ = Path {
             path_name: "14".to_string(),
-            segment_names: vec![
-                ("11".to_string(), Orientation::Forward),
-                ("12".to_string(), Orientation::Backward),
-                ("13".to_string(), Orientation::Forward),
-            ],
+            segment_names: vec!["11+".to_string(), "12-".to_string(), "13+".to_string()],
             overlaps: vec!["4M".to_string(), "5M".to_string()],
         };
 
         match parse_path(path) {
             Err(err) => {
-                panic!(format!("{:?}", err));
+                panic!(&format!("{:?}", err));
             }
-            Ok((_res, p)) => assert_eq!(p, path_),
+            Ok((res, p)) => assert_eq!(p, path_),
         }
     }
 
@@ -354,10 +358,7 @@ P	x	1+,3+,5+,6+,8+,9+,11+,12+,14+,15+	8M,1M,1M,3M,1M,19M,1M,4M,1M,11M";
                 vec![
                     "1+", "3+", "5+", "6+", "8+", "9+", "11+", "12+", "14+", "15+",
                 ],
-                vec!["8M", "1M", "1M", "3M", "1M", "19M", "1M", "4M", "1M", "11M"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect(),
+                vec!["8M", "1M", "1M", "3M", "1M", "19M", "1M", "4M", "1M", "11M"],
             )],
             containments: vec![],
         };
@@ -395,36 +396,5 @@ P	x	1+,3+,5+,6+,8+,9+,11+,12+,14+,15+	8M,1M,1M,3M,1M,19M,1M,4M,1M,11M";
                 assert_eq!(num_paths, 3);
             }
         }
-    }
-
-    #[test]
-    fn can_stream_gfa_lines() {
-        let file = File::open(&PathBuf::from("./lil.gfa")).unwrap();
-
-        let reader = BufReader::new(file);
-        let mut lines = reader.lines();
-
-        let mut gfa_lines = parse_gfa_stream(&mut lines);
-
-        assert_eq!(
-            gfa_lines.next(),
-            Some(Line::Header(Header {
-                version: "1.0".to_string()
-            }))
-        );
-
-        assert_eq!(
-            gfa_lines.next(),
-            Some(Line::Segment(Segment::new("1", "CAAATAAG")))
-        );
-        assert_eq!(
-            gfa_lines.next(),
-            Some(Line::Segment(Segment::new("2", "A")))
-        );
-
-        assert_eq!(
-            gfa_lines.next(),
-            Some(Line::Segment(Segment::new("3", "G")))
-        );
     }
 }

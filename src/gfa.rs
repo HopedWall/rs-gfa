@@ -57,24 +57,6 @@ impl Orientation {
             Self::Backward => false,
         }
     }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "+" => Some(Self::Forward),
-            "-" => Some(Self::Backward),
-            _ => None,
-        }
-    }
-}
-
-impl std::fmt::Display for Orientation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let sym = match self {
-            Self::Forward => '+',
-            Self::Backward => '-',
-        };
-        write!(f, "{}", sym)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -132,23 +114,14 @@ pub struct Containment {
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct Path {
     pub path_name: String,
-    pub segment_names: Vec<(String, Orientation)>,
+    pub segment_names: Vec<String>,
     pub overlaps: Vec<String>,
 }
 
 impl Path {
-    pub fn new(path_name: &str, seg_names: Vec<&str>, overlaps: Vec<String>) -> Path {
-        let segment_names = seg_names
-            .iter()
-            .map(|s| {
-                let s: &str = s;
-                let (n, o) = s.split_at(s.len() - 1);
-                let name = n.to_string();
-                let orientation = Orientation::from_str(o).unwrap();
-                (name, orientation)
-            })
-            .collect();
-
+    pub fn new(path_name: &str, seg_names: Vec<&str>, overlaps: Vec<&str>) -> Path {
+        let segment_names = seg_names.iter().map(|s| s.to_string()).collect();
+        let overlaps = overlaps.iter().map(|s| s.to_string()).collect();
         Path {
             path_name: path_name.to_string(),
             segment_names,
@@ -184,35 +157,5 @@ impl GFA {
             containments: vec![],
             paths: vec![],
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn create_path() {
-        let name = "path1";
-        let seg_names = vec!["1+", "2-", "13-", "60+"];
-        let overlaps: Vec<_> = vec!["8M", "10M", "0M", "2M"]
-            .into_iter()
-            .map(String::from)
-            .collect();
-
-        let path_expected = Path {
-            path_name: name.to_string(),
-            segment_names: vec![
-                ("1".to_string(), Orientation::Forward),
-                ("2".to_string(), Orientation::Backward),
-                ("13".to_string(), Orientation::Backward),
-                ("60".to_string(), Orientation::Forward),
-            ],
-            overlaps: overlaps.clone(),
-        };
-
-        let path = Path::new(name, seg_names, overlaps);
-
-        assert_eq!(path, path_expected);
     }
 }
